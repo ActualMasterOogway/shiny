@@ -1122,24 +1122,14 @@ impl<'a> Lifter<'a> {
                         }
                     }
                     OpCode::LOP_FORNPREP => {
-                        // TODO: do this properly
                         let limit = self.register(a as _);
                         let step = self.register((a + 1) as _);
                         let counter = self.register((a + 2) as _);
                         statements.push(ast::NumForInit::new(counter, limit, step).into());
 
-                        let loop_node = self
-                            .function
-                            .predecessor_blocks(self.block_to_node(block_start + index + 1))
-                            .filter(|&p| {
-                                self.function
-                                    .block(p)
-                                    .unwrap()
-                                    .last()
-                                    .is_some_and(|s| matches!(s, ast::Statement::NumForNext(_)))
-                            })
-                            .exactly_one()
-                            .unwrap();
+                        let loop_node = self.block_to_node(
+                            ((block_start + index) as isize + d as isize) as usize,
+                        );
                         edges.push((loop_node, BlockEdge::new(BranchType::Unconditional)));
                     }
                     OpCode::LOP_FORNLOOP => {

@@ -88,17 +88,24 @@ impl GraphStructurer {
                 }
 
                 let else_successors = self.function.successor_blocks(else_node).collect_vec();
-                if !(!then_successors.is_empty() && then_successors[0] == else_node)
-                    && !(else_successors.len() == 1 && then_successors[0] == else_successors[0])
-                    && !(then_successors[0] == header && else_node == init_block)
-                {
+                // Body terminates: body has no successors
+                // Body-is-exit: for some reason, FORNLOOPs Then and Else both point to the same node,
+                // which happens after match_jump merges away a nop JUMP body (such as `break`).
+                let body_terminates = then_successors.is_empty();
+                let body_is_exit = then_node == else_node;
+                let pattern_match = body_terminates
+                    || body_is_exit
+                    || then_successors[0] == else_node
+                    || (else_successors.len() == 1 && then_successors[0] == else_successors[0])
+                    || (then_successors[0] == header && else_node == init_block);
+                if !pattern_match {
                     return false;
                 }
 
                 let statement = self.function.block_mut(header).unwrap().pop().unwrap();
                 let statements = std::mem::take(&mut self.function.block_mut(header).unwrap().0);
 
-                let body_ast = if then_node == init_block {
+                let body_ast = if then_node == init_block || body_is_exit {
                     vec![ast::Break {}.into()].into()
                 } else {
                     let mut body_ast = self.function.remove_block(then_node).unwrap();
