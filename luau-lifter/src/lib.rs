@@ -209,7 +209,8 @@ fn decompile_function(
 
     let params = std::mem::take(&mut function.parameters);
     let is_variadic = function.is_variadic;
-    let block = Arc::new(restructure::lift(function).into());
+    let block: Arc<Mutex<ast::Block>> = Arc::new(restructure::lift(function).into());
+    ast::fold_classes::fold_classes(&mut block.lock());
     LocalDeclarer::default().declare_locals(
         // TODO: why does block.clone() not work?
         Arc::clone(&block),
