@@ -66,20 +66,55 @@ pub fn decompile_bytecode(bytecode: &[u8], encode_key: u8) -> String {
     match chunk {
         Bytecode::Error(msg) => msg,
         Bytecode::Chunk(chunk) => {
+            let main_ast = Arc::<Mutex<ast::Function>>::default();
             let mut lifted = Vec::new();
-            let mut stack = vec![(Arc::<Mutex<ast::Function>>::default(), chunk.main)];
+            let mut stack: Vec<(Arc<Mutex<ast::Function>>, usize)> = Vec::new();
+
+            // lift main on its own so its arc stays unique, try_unwrap needs that later
+            let main_lifted = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Lifter::lift(&chunk.functions, &chunk.string_table, chunk.main)
+            })) {
+                Ok((function, upvalues, child_functions)) => {
+                    stack.extend(child_functions.into_iter().map(|(a, f)| (a.0, f)));
+                    Some((function, upvalues))
+                }
+                Err(e) => {
+                    let msg = e.downcast_ref::<String>().map(String::as_str)
+                        .or_else(|| e.downcast_ref::<&str>().copied())
+                        .unwrap_or("unknown panic");
+                    main_ast.lock().body.push(
+                        ast::Comment::new(format!("failed to lift main: {}", msg)).into(),
+                    );
+                    None
+                }
+            };
+
             while let Some((ast_func, func_id)) = stack.pop() {
-                let (function, upvalues, child_functions) =
-                    Lifter::lift(&chunk.functions, &chunk.string_table, func_id);
-                lifted.push((ast_func, function, upvalues));
-                stack.extend(child_functions.into_iter().map(|(a, f)| (a.0, f)));
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    Lifter::lift(&chunk.functions, &chunk.string_table, func_id)
+                })) {
+                    Ok((function, upvalues, child_functions)) => {
+                        lifted.push((ast_func, function, upvalues));
+                        stack.extend(child_functions.into_iter().map(|(a, f)| (a.0, f)));
+                    }
+                    Err(e) => {
+                        let msg = e.downcast_ref::<String>().map(String::as_str)
+                            .or_else(|| e.downcast_ref::<&str>().copied())
+                            .unwrap_or("unknown panic");
+                        ast_func.lock().body.push(
+                            ast::Comment::new(format!(
+                                "failed to lift function {}: {}", func_id, msg
+                            )).into(),
+                        );
+                    }
+                }
             }
 
-            let (main, ..) = lifted.first().unwrap().clone();
+            // one clone so the panic branch can still write to the ast, the closure takes the other
             let mut upvalues = lifted
                 .into_iter()
                 .map(|(ast_function, function, upvalues_in)| {
-                    use std::{backtrace::Backtrace, cell::RefCell, fmt::Write, panic};
+                    use std::{backtrace::Backtrace, cell::RefCell, panic};
 
                     thread_local! {
                         static BACKTRACE: RefCell<Option<Backtrace>> = const { RefCell::new(None) };
@@ -106,26 +141,13 @@ pub fn decompile_bytecode(bytecode: &[u8], encode_key: u8) -> String {
                     match result {
                         Ok(r) => r,
                         Err(e) => {
-                            let panic_information = match e.downcast::<String>() {
-                                Ok(v) => *v,
-                                Err(e) => match e.downcast::<&str>() {
-                                    Ok(v) => v.to_string(),
-                                    _ => "Unknown Source of Error".to_owned(),
-                                },
-                            };
-
-                            let mut message = String::new();
-                            writeln!(message, "failed to decompile").unwrap();
-                            // writeln!(message, "function {} panicked at '{}'", function_id, panic_information).unwrap();
-                            // if let Some(backtrace) = BACKTRACE.with(|b| b.borrow_mut().take()) {
-                            //     write!(message, "stack backtrace:\n{}", backtrace).unwrap();
-                            // }
-
-                            ast_function.lock().body.extend(
-                                message
-                                    .trim_end()
-                                    .split('\n')
-                                    .map(|s| ast::Comment::new(s.to_string()).into()),
+                            let msg = e.downcast_ref::<String>().map(String::as_str)
+                                .or_else(|| e.downcast_ref::<&str>().copied())
+                                .unwrap_or("unknown panic");
+                            ast_function.lock().body.push(
+                                ast::Comment::new(format!(
+                                    "failed to decompile function {}: {}", function_id, msg
+                                )).into(),
                             );
                             (ByAddress(ast_function), Vec::new())
                         }
@@ -133,9 +155,30 @@ pub fn decompile_bytecode(bytecode: &[u8], encode_key: u8) -> String {
                 })
                 .collect::<FxHashMap<_, _>>();
 
-            let main = ByAddress(main);
-            upvalues.remove(&main);
-            let mut body = Arc::try_unwrap(main.0).unwrap().into_inner().body;
+            // main_ast is moved into the closure, so on panic theres nothing left to
+            // write to and we have to make up a body instead
+            let mut body = match main_lifted {
+                Some((function, upvalues_in)) => {
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        decompile_function(main_ast, function, upvalues_in)
+                    })) {
+                        Ok((ba, _)) => Arc::try_unwrap(ba.0).unwrap().into_inner().body,
+                        Err(e) => {
+                            let msg = e.downcast_ref::<String>().map(String::as_str)
+                                .or_else(|| e.downcast_ref::<&str>().copied())
+                                .unwrap_or("unknown panic");
+                            let mut block = ast::Block::default();
+                            block.push(
+                                ast::Comment::new(format!(
+                                    "failed to decompile main: {}", msg
+                                )).into(),
+                            );
+                            block
+                        }
+                    }
+                }
+                None => Arc::try_unwrap(main_ast).unwrap().into_inner().body,
+            };
             link_upvalues(&mut body, &mut upvalues);
             name_locals(&mut body, true);
             body.to_string()

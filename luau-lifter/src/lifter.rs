@@ -1127,9 +1127,16 @@ impl<'a> Lifter<'a> {
                         let counter = self.register((a + 2) as _);
                         statements.push(ast::NumForInit::new(counter, limit, step).into());
 
-                        let loop_node = self.block_to_node(
-                            ((block_start + index) as isize + d as isize) as usize,
-                        );
+                        // the compiler omits FORNLOOP when the body always returns,
+                        // then pc + d isnt a block and we want the exit at pc + 1 + d
+                        let fornloop_pc = ((block_start + index) as isize + d as isize) as usize;
+                        let loop_node = if self.blocks.contains_key(&fornloop_pc) {
+                            self.block_to_node(fornloop_pc)
+                        } else {
+                            self.block_to_node(
+                                ((block_start + index + 1) as isize + d as isize) as usize,
+                            )
+                        };
                         edges.push((loop_node, BlockEdge::new(BranchType::Unconditional)));
                     }
                     OpCode::LOP_FORNLOOP => {

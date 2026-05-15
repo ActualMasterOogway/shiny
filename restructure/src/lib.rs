@@ -94,7 +94,8 @@ impl GraphStructurer {
                     .conditional_edges(node)
                     .unwrap()
                     .map(|e| e.target());
-                self.match_conditional(node, then_target, else_target)
+                self.match_inner_loop_continue(node, then_target, else_target, dominators)
+                    || self.match_conditional(node, then_target, else_target)
             }
 
             _ => unreachable!(),
@@ -173,6 +174,16 @@ impl GraphStructurer {
             let block = self.function.remove_block(target).unwrap();
             self.function.block_mut(source).unwrap().extend(block.0);
             self.function.set_edges(source, edges);
+        } else if let Some(terminator) = Self::cheap_terminator(self.function.block(target).unwrap())
+        {
+            // luau has no goto, so copy the terminator to every fan-in instead
+            let goto_block = self.function.new_block();
+            self.function
+                .block_mut(goto_block)
+                .unwrap()
+                .push(terminator);
+            let edge = self.function.graph_mut().remove_edge(edge).unwrap();
+            self.function.graph_mut().add_edge(source, goto_block, edge);
         } else {
             // TODO: make label an Rc and have a global counter for block name
             let label = ast::Label(format!("l{}", target.index()));
@@ -192,6 +203,25 @@ impl GraphStructurer {
         }
     }
 
+    // a goto to a block thats only a terminator can just be the terminator
+    fn cheap_terminator(block: &ast::Block) -> Option<ast::Statement> {
+        let stmts: Vec<&ast::Statement> = block
+            .iter()
+            .filter(|s| !matches!(s, ast::Statement::Label(_)))
+            .collect();
+        let [only] = stmts.as_slice() else {
+            return None;
+        };
+        match only {
+            ast::Statement::Return(r) if r.values.is_empty() => {
+                Some(ast::Return::new(Vec::new()).into())
+            }
+            ast::Statement::Break(_) => Some(ast::Break {}.into()),
+            ast::Statement::Continue(_) => Some(ast::Continue {}.into()),
+            _ => None,
+        }
+    }
+
     fn remove_last_return(block: ast::Block) -> ast::Block {
         if let Some(ast::Statement::Return(last_statement)) = block.last() {
             if last_statement.values.is_empty() {
@@ -202,11 +232,119 @@ impl GraphStructurer {
         block
     }
 
+    // bigger bloats the output, smaller misses real opportunities
+    const TAIL_DUPLICATION_LIMIT: usize = 8;
+
+    // clone fan-in blocks so every copy has one predecessor, which is what the
+    // diamond/triangle/jump matchers need. only run after they reach a fixed point
+    // so we dont duplicate something they could have collapsed on their own
+    fn tail_duplicate(&mut self) -> bool {
+        let entry = self.function.entry().unwrap();
+        let candidates: Vec<NodeIndex> = self
+            .function
+            .graph()
+            .node_indices()
+            .filter(|&n| n != entry)
+            .filter(|&n| !self.is_loop_header(n))
+            .filter(|&n| {
+                let block = self.function.block(n).unwrap();
+                if block.is_empty() || block.len() > Self::TAIL_DUPLICATION_LIMIT {
+                    return false;
+                }
+                if matches!(block.first(), Some(ast::Statement::Label(_))) {
+                    return false;
+                }
+                // for-init/for-next pair with a specific header, cant be copied
+                block.iter().all(|s| {
+                    !matches!(
+                        s,
+                        ast::Statement::NumForInit(_)
+                            | ast::Statement::NumForNext(_)
+                            | ast::Statement::GenericForInit(_)
+                            | ast::Statement::GenericForNext(_)
+                            | ast::Statement::While(_)
+                            | ast::Statement::Repeat(_)
+                            | ast::Statement::NumericFor(_)
+                            | ast::Statement::GenericFor(_)
+                    )
+                })
+            })
+            .filter(|&n| {
+                let preds: Vec<_> = self
+                    .function
+                    .predecessor_blocks(n)
+                    .filter(|&p| p != n)
+                    .collect();
+                preds.len() >= 2
+            })
+            .collect();
+        if candidates.is_empty() {
+            return false;
+        }
+        let mut duplicated = false;
+        for node in candidates {
+            // earlier iterations may have changed these
+            let incoming: Vec<EdgeIndex> = self
+                .function
+                .graph()
+                .edges_directed(node, petgraph::Direction::Incoming)
+                .map(|e| e.id())
+                .collect();
+            if incoming.len() < 2 {
+                continue;
+            }
+            let block_template = self.function.block(node).unwrap().clone();
+            let outgoing: Vec<(NodeIndex, cfg::block::BlockEdge)> = self
+                .function
+                .graph()
+                .edges_directed(node, petgraph::Direction::Outgoing)
+                .map(|e| (e.target(), e.weight().clone()))
+                .collect();
+            // first predecessor keeps the original, the rest get clones
+            for &edge in incoming.iter().skip(1) {
+                let Some((source, _)) = self.function.graph().edge_endpoints(edge) else {
+                    continue;
+                };
+                let edge_weight = self
+                    .function
+                    .graph()
+                    .edge_weight(edge)
+                    .cloned()
+                    .unwrap_or_default();
+                let clone = self.function.new_block();
+                *self.function.block_mut(clone).unwrap() = block_template.clone();
+                for (target, weight) in &outgoing {
+                    self.function
+                        .graph_mut()
+                        .add_edge(clone, *target, weight.clone());
+                }
+                self.function.graph_mut().remove_edge(edge);
+                self.function
+                    .graph_mut()
+                    .add_edge(source, clone, edge_weight);
+                duplicated = true;
+            }
+        }
+        if duplicated {
+            self.find_loop_headers();
+        }
+        duplicated
+    }
+
     fn collapse(&mut self) {
+        let mut tail_duplicated = false;
         loop {
             while self.match_blocks() {}
             if self.function.graph().node_count() == 1 {
                 break;
+            }
+            // only once per collapse, each duplication adds nodes
+            if !tail_duplicated && self.tail_duplicate() {
+                tail_duplicated = true;
+                while self.match_blocks() {}
+                if self.function.graph().node_count() == 1 {
+                    break;
+                }
             }
             // last resort refinement
             let edges = self.function.graph().edge_indices().collect::<Vec<_>>();

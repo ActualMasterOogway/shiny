@@ -352,4 +352,143 @@ impl GraphStructurer {
         self.match_diamond_conditional(entry, then_node, else_node)
             || self.match_triangle_conditional(entry, then_node, else_node)
     }
+
+    // a -> b + a -> h, where h is a loop header that dominates a
+    // results in a -> b with the h branch as continue (or break, if h is an outer loop)
+    // the diamond/triangle matchers only look at the header, not inside the body
+    pub(crate) fn match_inner_loop_continue(
+        &mut self,
+        entry: NodeIndex,
+        then_target: NodeIndex,
+        else_target: NodeIndex,
+        dominators: &Dominators<NodeIndex>,
+    ) -> bool {
+        if self.is_loop_header(entry) {
+            // try_collapse_loop already handles a continue at the header
+            return false;
+        }
+        let then_is_back = then_target != entry
+            && self.is_loop_header(then_target)
+            && dominators
+                .dominators(entry)
+                .is_some_and(|mut d| d.any(|x| x == then_target));
+        let else_is_back = else_target != entry
+            && self.is_loop_header(else_target)
+            && dominators
+                .dominators(entry)
+                .is_some_and(|mut d| d.any(|x| x == else_target));
+
+        if then_is_back && else_is_back {
+            // both branches are headers, so the outer one means "leave the inner
+            // loop and continue the outer", which is a break of the inner loop
+            let mut innermost: Option<NodeIndex> = None;
+            if let Some(doms) = dominators.dominators(entry) {
+                for d in doms {
+                    if self.is_loop_header(d) {
+                        innermost = Some(d);
+                        break;
+                    }
+                }
+            }
+            let Some(innermost) = innermost else {
+                return false;
+            };
+            let (outer_is_then, outer_target, _inner_target) =
+                if then_target == innermost && else_target != innermost {
+                    (false, else_target, then_target)
+                } else if else_target == innermost && then_target != innermost {
+                    (true, then_target, else_target)
+                } else {
+                    return false;
+                };
+
+            // give the inner loop a real exit edge to find
+            let break_block = self.function.new_block();
+            self.function
+                .block_mut(break_block)
+                .unwrap()
+                .push(ast::Break {}.into());
+            self.function.set_edges(
+                break_block,
+                vec![(
+                    outer_target,
+                    BlockEdge::new(BranchType::Unconditional),
+                )],
+            );
+            let edges_to_replace: Vec<_> = self
+                .function
+                .graph()
+                .edges_directed(entry, petgraph::Direction::Outgoing)
+                .filter_map(|e| {
+                    if e.target() == outer_target {
+                        Some((e.id(), e.weight().clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (eid, weight) in edges_to_replace {
+                self.function.graph_mut().remove_edge(eid);
+                self.function
+                    .graph_mut()
+                    .add_edge(entry, break_block, weight);
+            }
+            // no need to touch the if, the loop matcher absorbs break_block
+            let _ = outer_is_then;
+            self.find_loop_headers();
+            return true;
+        }
+
+        if then_is_back == else_is_back {
+            return false;
+        }
+        let other_target = if then_is_back { else_target } else { then_target };
+        let back_target = if then_is_back { then_target } else { else_target };
+        // dont collapse a loop-header conditional by accident
+        if other_target == then_target && then_is_back {
+            return false;
+        }
+        // continue only affects the innermost loop, so a back-edge to an outer
+        // header has to become a break instead
+        let mut innermost_header: Option<NodeIndex> = None;
+        if let Some(doms) = dominators.dominators(entry) {
+            for d in doms {
+                if self.is_loop_header(d) {
+                    innermost_header = Some(d);
+                    break;
+                }
+            }
+        }
+        let stmt: ast::Statement = if innermost_header == Some(back_target) {
+            ast::Continue {}.into()
+        } else {
+            ast::Break {}.into()
+        };
+        let block = self.function.block_mut(entry).unwrap();
+        let Some(if_stat) = block.last_mut().and_then(|s| s.as_if_mut()) else {
+            return false;
+        };
+        if then_is_back {
+            if_stat.then_block = Arc::new(Mutex::new(vec![stmt].into()));
+        } else {
+            if_stat.else_block = Arc::new(Mutex::new(vec![stmt].into()));
+        }
+        Self::simplify_if(if_stat);
+        if if_stat.then_block.lock().is_empty() {
+            if_stat.condition = ast::Unary::new(
+                if_stat.condition.clone(),
+                ast::UnaryOperation::Not,
+            )
+            .reduce_condition();
+            std::mem::swap(&mut if_stat.then_block, &mut if_stat.else_block);
+        }
+        self.function.remove_edges(entry);
+        self.function.set_edges(
+            entry,
+            vec![(other_target, BlockEdge::new(BranchType::Unconditional))],
+        );
+        self.find_loop_headers();
+        self.match_jump(entry, Some(other_target));
+        true
+    }
 }

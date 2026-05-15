@@ -110,9 +110,6 @@ impl GraphStructurer {
                 } else {
                     let mut body_ast = self.function.remove_block(then_node).unwrap();
                     body_ast.extend(statements.iter().cloned());
-                    if !matches!(body_ast.last(), Some(ast::Statement::Return(_))) {
-                        body_ast.push(ast::Break {}.into());
-                    }
                     body_ast
                 };
                 let init_ast = &mut self.function.block_mut(init_block).unwrap();
