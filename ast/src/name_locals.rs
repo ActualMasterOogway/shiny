@@ -68,6 +68,24 @@ impl Namer {
                     }
                     self.name_locals(&mut generic_for.block.lock());
                 }
+                Statement::Class(class) => {
+                    // Bind the class local to its original name when the CLASS_SHAPE
+                    // carried a usable identifier (SHOULD always be the case), otherwise
+                    // fall back to a generated name. Method bodies are reached as
+                    // closures via post_traverse_values above
+                    let usable = !class.name.is_empty()
+                        && class.name.bytes().next().is_some_and(|b| {
+                            b.is_ascii_alphabetic() || b == b'_'
+                        })
+                        && class.name.bytes().all(|b| {
+                            b.is_ascii_alphanumeric() || b == b'_'
+                        });
+                    if usable {
+                        class.local.0 .0.lock().0 = Some(class.name.clone());
+                    } else {
+                        self.name_local("v", &class.local);
+                    }
+                }
                 _ => {}
             }
         }

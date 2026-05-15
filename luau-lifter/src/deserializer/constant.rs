@@ -15,6 +15,10 @@ const CONSTANT_CLOSURE: u8 = 6;
 const CONSTANT_VECTOR: u8 = 7;
 const CONSTANT_TABLE_WITH_CONSTANTS: u8 = 8;
 const CONSTANT_INTEGER: u8 = 9;
+// CLASS_SHAPE was added in bytecode v10. a build (the
+// initial 0.720/0.721 window) inserted CLASS_SHAPE at tag 9 and shifted INTEGER
+// to tag 10, tho that was reverted before release
+const CONSTANT_CLASS_SHAPE: u8 = 10;
 
 #[derive(Debug)]
 pub enum Constant {
@@ -28,6 +32,13 @@ pub enum Constant {
     Vector(f32, f32, f32, f32),
     TableWithConstants(Vec<(usize, i32)>),
     Integer(i64),
+    // class_name and properties are indices into this proto's constant table
+    // (each referenced constant is a string), method names are recovered from
+    // each NEWCLASSMEMBERs AUX operand
+    ClassShape {
+        class_name: usize,
+        properties: Vec<usize>,
+    },
 }
 
 fn leb128_u64(input: &[u8]) -> IResult<&[u8], u64> {
@@ -102,6 +113,28 @@ impl Constant {
                     magnitude as i64
                 };
                 Ok((input, Constant::Integer(value)))
+            }
+            CONSTANT_CLASS_SHAPE => {
+                let (input, class_name) = leb128_usize(input)?;
+                let (input, property_count) = leb128_usize(input)?;
+                let (mut input, method_count) = leb128_usize(input)?;
+                let mut properties = Vec::with_capacity(property_count);
+                for _ in 0..property_count {
+                    let (rest, idx) = leb128_usize(input)?;
+                    properties.push(idx);
+                    input = rest;
+                }
+                // skip past the method name indices (recovered from NEWCLASSMEMBER)
+                for _ in 0..method_count {
+                    input = leb128_usize(input)?.0;
+                }
+                Ok((
+                    input,
+                    Constant::ClassShape {
+                        class_name,
+                        properties,
+                    },
+                ))
             }
             _ => panic!("{}", tag),
         }

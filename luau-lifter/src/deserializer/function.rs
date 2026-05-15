@@ -71,7 +71,9 @@ impl Function {
                 | OpCode::LOP_JUMPXEQKS
                 | OpCode::LOP_GETUDATAKS
                 | OpCode::LOP_SETUDATAKS
-                | OpCode::LOP_NAMECALLUDATA => {
+                | OpCode::LOP_NAMECALLUDATA
+                | OpCode::LOP_NEWCLASSMEMBER
+                | OpCode::LOP_CALLFB => {
                     let aux = vec[pc + 1];
                     pc += 2;
                     match ins {
@@ -113,7 +115,7 @@ impl Function {
         v
     }
 
-    pub(crate) fn parse(input: &[u8], encode_key: u8) -> IResult<&[u8], Self> {
+    pub(crate) fn parse(input: &[u8], encode_key: u8, version: u8) -> IResult<&[u8], Self> {
         let (input, max_stack_size) = le_u8(input)?;
         let (input, num_parameters) = le_u8(input)?;
         let (input, num_upvalues) = le_u8(input)?;
@@ -173,6 +175,20 @@ impl Function {
                 }
                 input
             }
+        };
+        // Bytecode v11 has per proto call feedback vector: a varint count
+        // followed by `(u8 slot type, varint pc)` per slot. It's runtime
+        // metadata so we read past it
+        let input = if version >= 11 {
+            let (mut input, slot_count) = leb128_usize(input)?;
+            for _ in 0..slot_count {
+                let (rest, _slot_type) = le_u8(input)?;
+                let (rest, _pc) = leb128_usize(rest)?;
+                input = rest;
+            }
+            input
+        } else {
+            input
         };
         Ok((
             input,

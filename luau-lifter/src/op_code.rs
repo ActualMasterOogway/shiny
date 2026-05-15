@@ -372,6 +372,18 @@ pub enum OpCode {
     LOP_SETUDATAKS,
     LOP_NAMECALLUDATA,
 
+    // NEWCLASSMEMBER: register a method on a class object (bytecode v10+).
+    // A: target register holding the class
+    // B: reserved (always 0)
+    // C: register holding the member's initial value (currently always a function)
+    // AUX: constant table index of the member name (a string)
+    LOP_NEWCLASSMEMBER,
+
+    // CALLFB: like CALL but collects runtime call-target stats in a feedback slot (bytecode v11+).
+    // A/B/C: identical to CALL (function register, arg count + 1, result count + 1)
+    // AUX: feedback slot id (0xFFFFFFFF when sealed)
+    LOP_CALLFB,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT,
 }
