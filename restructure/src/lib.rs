@@ -1,5 +1,8 @@
+use ast::{LocalRw, Traverse};
 use cfg::{block::BranchType, function::Function};
 use itertools::Itertools;
+use parking_lot::Mutex;
+use triomphe::Arc;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use petgraph::{
@@ -235,6 +238,72 @@ impl GraphStructurer {
     // bigger bloats the output, smaller misses real opportunities
     const TAIL_DUPLICATION_LIMIT: usize = 8;
 
+    // a shallow clone shares the if/loop body arcs, and the passes after this
+    // mutate them in place, which corrupts both copies
+    fn deep_clone_block(block: &ast::Block) -> ast::Block {
+        let mut cloned = block.clone();
+        for stmt in cloned.iter_mut() {
+            match stmt {
+                ast::Statement::If(s) => {
+                    let t = Self::deep_clone_block(&s.then_block.lock());
+                    s.then_block = Arc::new(Mutex::new(t));
+                    let e = Self::deep_clone_block(&s.else_block.lock());
+                    s.else_block = Arc::new(Mutex::new(e));
+                }
+                ast::Statement::While(s) => {
+                    let b = Self::deep_clone_block(&s.block.lock());
+                    s.block = Arc::new(Mutex::new(b));
+                }
+                ast::Statement::Repeat(s) => {
+                    let b = Self::deep_clone_block(&s.block.lock());
+                    s.block = Arc::new(Mutex::new(b));
+                }
+                ast::Statement::NumericFor(s) => {
+                    let b = Self::deep_clone_block(&s.block.lock());
+                    s.block = Arc::new(Mutex::new(b));
+                }
+                ast::Statement::GenericFor(s) => {
+                    let b = Self::deep_clone_block(&s.block.lock());
+                    s.block = Arc::new(Mutex::new(b));
+                }
+                _ => {}
+            }
+        }
+        cloned
+    }
+
+    // a closures function arc is keyed by identity in the upvalue-link map, so
+    // sharing it double-links and cloning it loses the key. dont duplicate those
+    fn block_has_closure(block: &ast::Block) -> bool {
+        let mut tmp = block.clone();
+        for stmt in tmp.iter_mut() {
+            let mut found = false;
+            stmt.traverse_rvalues(&mut |r| {
+                if matches!(r, ast::RValue::Closure(_)) {
+                    found = true;
+                }
+            });
+            if found {
+                return true;
+            }
+            let sub = match stmt {
+                ast::Statement::If(s) => {
+                    Self::block_has_closure(&s.then_block.lock())
+                        || Self::block_has_closure(&s.else_block.lock())
+                }
+                ast::Statement::While(s) => Self::block_has_closure(&s.block.lock()),
+                ast::Statement::Repeat(s) => Self::block_has_closure(&s.block.lock()),
+                ast::Statement::NumericFor(s) => Self::block_has_closure(&s.block.lock()),
+                ast::Statement::GenericFor(s) => Self::block_has_closure(&s.block.lock()),
+                _ => false,
+            };
+            if sub {
+                return true;
+            }
+        }
+        false
+    }
+
     // clone fan-in blocks so every copy has one predecessor, which is what the
     // diamond/triangle/jump matchers need. only run after they reach a fixed point
     // so we dont duplicate something they could have collapsed on their own
@@ -248,13 +317,29 @@ impl GraphStructurer {
             .filter(|&n| !self.is_loop_header(n))
             .filter(|&n| {
                 let block = self.function.block(n).unwrap();
-                if block.is_empty() || block.len() > Self::TAIL_DUPLICATION_LIMIT {
+                if block.is_empty() {
+                    return false;
+                }
+                // a join that only leads to a return is bounded, so allow bigger
+                // ones there
+                let is_tail = self.function.successor_blocks(n).count() == 0
+                    || self
+                        .function
+                        .successor_blocks(n)
+                        .all(|s| self.function.successor_blocks(s).count() == 0);
+                let limit = if is_tail {
+                    Self::TAIL_DUPLICATION_LIMIT * 4
+                } else {
+                    Self::TAIL_DUPLICATION_LIMIT
+                };
+                if block.len() > limit {
                     return false;
                 }
                 if matches!(block.first(), Some(ast::Statement::Label(_))) {
                     return false;
                 }
-                // for-init/for-next pair with a specific header, cant be copied
+                // a collapsed loop statement is self-contained and safe to copy,
+                // only the for-init/for-next pseudo-statements pair with a header
                 block.iter().all(|s| {
                     !matches!(
                         s,
@@ -262,12 +347,8 @@ impl GraphStructurer {
                             | ast::Statement::NumForNext(_)
                             | ast::Statement::GenericForInit(_)
                             | ast::Statement::GenericForNext(_)
-                            | ast::Statement::While(_)
-                            | ast::Statement::Repeat(_)
-                            | ast::Statement::NumericFor(_)
-                            | ast::Statement::GenericFor(_)
                     )
-                })
+                }) && !Self::block_has_closure(block)
             })
             .filter(|&n| {
                 let preds: Vec<_> = self
@@ -312,7 +393,7 @@ impl GraphStructurer {
                     .cloned()
                     .unwrap_or_default();
                 let clone = self.function.new_block();
-                *self.function.block_mut(clone).unwrap() = block_template.clone();
+                *self.function.block_mut(clone).unwrap() = Self::deep_clone_block(&block_template);
                 for (target, weight) in &outgoing {
                     self.function
                         .graph_mut()
@@ -331,20 +412,209 @@ impl GraphStructurer {
         duplicated
     }
 
+    // a break/continue not inside a loop here belongs to an enclosing loop, and
+    // the dispatch `while true` would steal it
+    fn block_has_dangling_break_continue(block: &ast::Block) -> bool {
+        block.iter().any(|stmt| match stmt {
+            ast::Statement::Break(_) | ast::Statement::Continue(_) => true,
+            ast::Statement::If(s) => {
+                Self::block_has_dangling_break_continue(&s.then_block.lock())
+                    || Self::block_has_dangling_break_continue(&s.else_block.lock())
+            }
+            _ => false,
+        })
+    }
+
+    // same skip rule as LocalDeclarer, a for's induction variable is per-iteration
+    // and must not be hoisted out of the loop, so only recurse into its body
+    fn collect_residual_writes(block: &ast::Block, out: &mut FxHashSet<ast::RcLocal>) {
+        for stat in block.iter() {
+            match stat {
+                ast::Statement::NumericFor(s) => {
+                    Self::collect_residual_writes(&s.block.lock(), out);
+                }
+                ast::Statement::GenericFor(s) => {
+                    Self::collect_residual_writes(&s.block.lock(), out);
+                }
+                ast::Statement::If(s) => {
+                    for local in stat.values_written() {
+                        out.insert(local.clone());
+                    }
+                    Self::collect_residual_writes(&s.then_block.lock(), out);
+                    Self::collect_residual_writes(&s.else_block.lock(), out);
+                }
+                ast::Statement::While(s) => {
+                    for local in stat.values_written() {
+                        out.insert(local.clone());
+                    }
+                    Self::collect_residual_writes(&s.block.lock(), out);
+                }
+                ast::Statement::Repeat(s) => {
+                    for local in stat.values_written() {
+                        out.insert(local.clone());
+                    }
+                    Self::collect_residual_writes(&s.block.lock(), out);
+                }
+                other => {
+                    for local in other.values_written() {
+                        out.insert(local.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // flatten the whole residual into `local state = n; while true do if state == 1
+    // then ... elseif ... end end`. always runnable, but the output is ugly
+    // TODO: this fires for reducible residuals too, which is overkill. a reducible
+    // region can always be done with a guard boolean instead, no duplication and no
+    // state machine. only irreducible cfgs actually need this
+    fn dispatch_residual(&mut self) -> bool {
+        let nodes: Vec<NodeIndex> = self.function.graph().node_indices().collect();
+        if nodes.iter().any(|&n| {
+            self.is_loop_header(n)
+                || Self::block_has_dangling_break_continue(self.function.block(n).unwrap())
+        }) {
+            return false;
+        }
+        let entry = self.function.entry().unwrap();
+        let id: FxHashMap<NodeIndex, usize> =
+            nodes.iter().enumerate().map(|(i, &n)| (n, i + 1)).collect();
+        debug_assert!(self
+            .function
+            .graph()
+            .edge_indices()
+            .all(|e| id.contains_key(&self.function.graph().edge_endpoints(e).unwrap().1)));
+
+        let state_local = ast::RcLocal::default();
+
+        // the arms are siblings, so LocalDeclarer would park each `local` inside the
+        // one arm that writes it and reads from the others would hit a nil global.
+        // a bare decl at the root dominates every arm
+        let mut hoist_locals: FxHashSet<ast::RcLocal> = FxHashSet::default();
+        for &n in &nodes {
+            Self::collect_residual_writes(
+                self.function.block(n).unwrap(),
+                &mut hoist_locals,
+            );
+        }
+
+        // while the graph is still intact
+        let mut arms: Vec<(usize, ast::Block)> = Vec::new();
+        for &n in &nodes {
+            let mut body = self.function.block(n).unwrap().clone();
+            let succs: Vec<NodeIndex> = self.function.successor_blocks(n).collect();
+            match succs.len() {
+                0 => {
+                    if !matches!(body.last(), Some(ast::Statement::Return(_))) {
+                        body.push(ast::Break {}.into());
+                    }
+                }
+                1 => {
+                    body.push(
+                        ast::Assign::new(
+                            vec![ast::LValue::Local(state_local.clone())],
+                            vec![ast::Literal::Number(id[&succs[0]] as f64).into()],
+                        )
+                        .into(),
+                    );
+                }
+                2 => {
+                    let (then_e, else_e) = self.function.conditional_edges(n).unwrap();
+                    let (t, e) = (id[&then_e.target()], id[&else_e.target()]);
+                    let Ok(if_stat) = body.pop().unwrap().into_if() else {
+                        return false;
+                    };
+                    body.push(
+                        ast::If::new(
+                            if_stat.condition,
+                            vec![ast::Assign::new(
+                                vec![ast::LValue::Local(state_local.clone())],
+                                vec![ast::Literal::Number(t as f64).into()],
+                            )
+                            .into()]
+                            .into(),
+                            vec![ast::Assign::new(
+                                vec![ast::LValue::Local(state_local.clone())],
+                                vec![ast::Literal::Number(e as f64).into()],
+                            )
+                            .into()]
+                            .into(),
+                        )
+                        .into(),
+                    );
+                }
+                _ => unreachable!(),
+            }
+            arms.push((id[&n], body));
+        }
+
+        let (_, mut acc) = arms.pop().unwrap();
+        while let Some((k, arm)) = arms.pop() {
+            let cond = ast::Binary::new(
+                ast::RValue::Local(state_local.clone()),
+                ast::Literal::Number(k as f64).into(),
+                ast::BinaryOperation::Equal,
+            )
+            .into();
+            acc = vec![ast::Statement::from(ast::If::new(cond, arm, acc))].into();
+        }
+
+        let mut out_body = ast::Block::default();
+        out_body.push(ast::Comment::new("control flow flattened: this region could not be structured without a
+            `goto` (unsupported in Luau), so it was lowered to the state-machine
+            dispatch loop below to keep the output runnable.".to_string()).into());
+        if !hoist_locals.is_empty() {
+            let mut hoist = ast::Assign::new(
+                hoist_locals
+                    .into_iter()
+                    .map(ast::LValue::Local)
+                    .collect(),
+                Vec::new(),
+            );
+            hoist.prefix = true;
+            out_body.push(hoist.into());
+        }
+        let mut init = ast::Assign::new(
+            vec![ast::LValue::Local(state_local.clone())],
+            vec![ast::Literal::Number(id[&entry] as f64).into()],
+        );
+        init.prefix = true;
+        out_body.push(init.into());
+        out_body
+            .push(ast::While::new(ast::Literal::Boolean(true).into(), acc).into());
+
+        for &n in &nodes {
+            self.function.remove_block(n);
+        }
+        let out = self.function.new_block();
+        *self.function.block_mut(out).unwrap() = out_body;
+        self.function.set_entry(out);
+        true
+    }
+
     fn collapse(&mut self) {
-        let mut tail_duplicated = false;
+        let mut taildup_rounds = 0u32;
         loop {
             while self.match_blocks() {}
             if self.function.graph().node_count() == 1 {
                 break;
             }
-            // only once per collapse, each duplication adds nodes
-            if !tail_duplicated && self.tail_duplicate() {
-                tail_duplicated = true;
+            // duplicating one join exposes the next, so keep going while it shrinks
+            let before = self.function.graph().node_count();
+            if taildup_rounds < 16 && self.tail_duplicate() {
+                taildup_rounds += 1;
                 while self.match_blocks() {}
                 if self.function.graph().node_count() == 1 {
                     break;
                 }
+                if self.function.graph().node_count() < before {
+                    continue;
+                }
+            }
+            // otherwise fall through to the goto refinement below
+            if self.dispatch_residual() {
+                break;
             }
             // last resort refinement
             let edges = self.function.graph().edge_indices().collect::<Vec<_>>();

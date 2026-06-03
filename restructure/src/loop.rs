@@ -88,6 +88,18 @@ impl GraphStructurer {
                 }
 
                 let else_successors = self.function.successor_blocks(else_node).collect_vec();
+                // if the body falls into a shared terminator, copy it in so the body terminates
+                // locally and doesnt fail for-next matching
+                if then_successors.len() == 1
+                    && then_node != else_node
+                    && then_successors[0] != header
+                    && let Some(terminator) =
+                        Self::cheap_terminator(self.function.block(then_successors[0]).unwrap())
+                {
+                    self.function.block_mut(then_node).unwrap().push(terminator);
+                    self.function.remove_edges(then_node);
+                }
+                let then_successors = self.function.successor_blocks(then_node).collect_vec();
                 // Body terminates: body has no successors
                 // Body-is-exit: for some reason, FORNLOOPs Then and Else both point to the same node,
                 // which happens after match_jump merges away a nop JUMP body (such as `break`).

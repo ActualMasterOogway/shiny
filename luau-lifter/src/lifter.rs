@@ -1127,15 +1127,31 @@ impl<'a> Lifter<'a> {
                         let counter = self.register((a + 2) as _);
                         statements.push(ast::NumForInit::new(counter, limit, step).into());
 
-                        // the compiler omits FORNLOOP when the body always returns,
-                        // then pc + d isnt a block and we want the exit at pc + 1 + d
-                        let fornloop_pc = ((block_start + index) as isize + d as isize) as usize;
-                        let loop_node = if self.blocks.contains_key(&fornloop_pc) {
-                            self.block_to_node(fornloop_pc)
-                        } else {
-                            self.block_to_node(
-                                ((block_start + index + 1) as isize + d as isize) as usize,
-                            )
+                        // d jumps past the loop to the exit, it doesnt point at the
+                        // FORNLOOP, and the exit can be merged with a later return so
+                        // pc + d lands somewhere unrelated. find our FORNLOOP by its
+                        // back-edge to the body start, or take the exit if its omitted
+                        let prep_pc = block_start + index;
+                        let body_start = prep_pc + 1;
+                        let fornloop_pc = self.function_list[self.function.id]
+                            .instructions
+                            .iter()
+                            .enumerate()
+                            .find_map(|(l, ins)| match ins {
+                                Instruction::AD {
+                                    op_code: OpCode::LOP_FORNLOOP,
+                                    d: dl,
+                                    ..
+                                } if (l as isize + 1 + *dl as isize) == body_start as isize => {
+                                    Some(l)
+                                }
+                                _ => None,
+                            });
+                        let loop_node = match fornloop_pc {
+                            Some(l) => self.block_to_node(l),
+                            None => {
+                                self.block_to_node((body_start as isize + d as isize) as usize)
+                            }
                         };
                         edges.push((loop_node, BlockEdge::new(BranchType::Unconditional)));
                     }
