@@ -8,7 +8,7 @@ use crate::function::Function;
 pub(crate) struct UpvaluesOpen {
     pub open: FxHashMap<
         NodeIndex,
-        FxHashMap<ast::RcLocal, RangeInclusiveMap<usize, Vec<(NodeIndex, usize)>>>,
+        FxHashMap<ast::RcLocal, RangeInclusiveMap<usize, (NodeIndex, usize)>>,
     >,
     old_locals: FxHashMap<ast::RcLocal, ast::RcLocal>,
 }
@@ -43,29 +43,12 @@ impl UpvaluesOpen {
                         .map(|l| this.old_locals[l].clone())
                     {
                         let open_ranges = block_opened.entry(opened).or_default();
-                        let mut open_locations = Vec::new();
-                        if let Some((_prev_range, prev_locations)) =
-                            open_ranges.get_key_value(&stat_index)
-                        {
-                            // TODO: this assert fails in Luau with the below code,
-                            // but i dont know why. it appears to work fine with the
-                            // assert commented out, but we should double check it.
-                            /*
-                            local u = a
-
-                            if u then
-                                print'hi'
-                            end
-
-                            function f()
-                                return u
-                            end
-                            */
-                            // assert!(prev_range.contains(&(block.len() - 1)));
-                            open_locations.extend(prev_locations);
-                        }
-                        open_locations.push((node, stat_index));
-                        open_ranges.insert(stat_index..=block.len() - 1, open_locations);
+                        // only .first() of the old vec was ever read, one value is enough
+                        let loc = open_ranges
+                            .get(&stat_index)
+                            .copied()
+                            .unwrap_or((node, stat_index));
+                        open_ranges.insert(stat_index..=block.len() - 1, loc);
                     }
                 } else if let ast::Statement::Close(close) = statement {
                     for closed in &close.locals {
@@ -84,19 +67,18 @@ impl UpvaluesOpen {
                     let open_at_end = this.open[&node]
                         .iter()
                         .filter_map(|(l, m)| {
-                            Some((l.clone(), m.get(&(block.len().saturating_sub(1)))?.clone()))
+                            Some((l.clone(), *m.get(&(block.len().saturating_sub(1)))?))
                         })
                         .collect::<Vec<_>>();
                     let successor_open = this.open.entry(successor).or_default();
-                    for (open, mut locations) in open_at_end {
+                    for (open, location) in open_at_end {
                         let open_ranges = successor_open.entry(open).or_default();
-                        // TODO: sorta ugly doing a saturating subtraction, use uninclusive ranges instead?
                         let range = 0..=successor_block.len().saturating_sub(1);
-                        if let Some((prev_range, prev_locations)) = open_ranges.get_key_value(&0) {
+                        if let Some((prev_range, _)) = open_ranges.get_key_value(&0) {
                             assert_eq!(prev_range, &range);
-                            locations.extend(prev_locations);
                         }
-                        open_ranges.insert(range, locations);
+                        // last predecessor wins, same as the old insert-overwrite
+                        open_ranges.insert(range, location);
                     }
 
                     stack.push(successor);

@@ -452,7 +452,7 @@ impl<'a> SsaConstructor<'a> {
                             self.upvalues_passed
                                 .entry(old_local.clone())
                                 .or_default()
-                                .entry(*open_locations.first().unwrap())
+                                .entry(*open_locations)
                                 .or_default()
                                 .insert(value);
                         }
