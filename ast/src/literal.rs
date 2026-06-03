@@ -66,9 +66,17 @@ impl fmt::Display for Literal {
             Literal::Nil => write!(f, "nil"),
             Literal::Boolean(value) => write!(f, "{}", value),
             &Literal::Number(value) => {
-                // TODO: this is a bit messy, just use `buffer.format` here and format_finite
-                // in formatter.rs
-                debug_assert!(value.is_finite());
+                // inf and nan have no literal syntax, and math.huge/math.nan cant
+                // rebind under a surrounding operator the way 1/0 would
+                if !value.is_finite() {
+                    let negative = value.is_sign_negative();
+                    return match (value.is_nan(), negative) {
+                        (true, false) => write!(f, "math.nan"),
+                        (true, true) => write!(f, "-math.nan"),
+                        (false, false) => write!(f, "math.huge"),
+                        (false, true) => write!(f, "-math.huge"),
+                    };
+                }
                 // TODO: fork ryu to remove ".0"
                 let mut buffer = ryu::Buffer::new();
                 let printed = buffer.format_finite(value);
