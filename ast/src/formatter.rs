@@ -8,8 +8,8 @@ use std::{
 use itertools::Itertools;
 
 use crate::{
-    Assign, Binary, BinaryOperation, Block, Call, Closure, GenericFor, If, Index, LValue, Literal,
-    MethodCall, NumericFor, RValue, Repeat, Return, Select, Statement, Table, Unary, While,
+    Assign, Binary, BinaryOperation, Block, Call, Class, Closure, GenericFor, If, Index, LValue,
+    Literal, MethodCall, NumericFor, RValue, Repeat, Return, Select, Statement, Table, Unary, While,
 };
 
 pub enum IndentationMode {
@@ -730,6 +730,34 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
         Ok(())
     }
 
+    pub(crate) fn format_class(&mut self, class: &Class) -> fmt::Result {
+        write!(self.output, "class {}", class.local)?;
+        writeln!(self.output)?;
+        self.indentation_level += 1;
+        for property in &class.properties {
+            self.indent()?;
+            writeln!(self.output, "public {}", property)?;
+        }
+        for method in &class.methods {
+            self.indent()?;
+            if let RValue::Closure(closure) = &method.value {
+                write!(self.output, "function {}(", method.name)?;
+                self.format_closure_parameters(closure)?;
+                write!(self.output, ")")?;
+                self.format_closure_body(closure)?;
+                write!(self.output, "end")?;
+            } else {
+                // inlining did not resolve the closure, fall back to a field assignment
+                write!(self.output, "{} = ", method.name)?;
+                self.format_rvalue(&method.value)?;
+            }
+            writeln!(self.output)?;
+        }
+        self.indentation_level -= 1;
+        self.indent()?;
+        write!(self.output, "end")
+    }
+
     fn format_statement(&mut self, statement: &Statement) -> fmt::Result {
         self.indent()?;
 
@@ -743,6 +771,7 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
             Statement::Call(call) => self.format_call(call),
             Statement::MethodCall(method_call) => self.format_method_call(method_call),
             Statement::Return(r#return) => self.format_return(r#return),
+            Statement::Class(class) => self.format_class(class),
             _ => write!(self.output, "{}", statement),
         }
     }

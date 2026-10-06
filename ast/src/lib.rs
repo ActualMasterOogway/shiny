@@ -15,8 +15,10 @@ mod assign;
 mod binary;
 mod r#break;
 mod call;
+mod class;
 mod close;
 mod closure;
+pub mod fold_classes;
 mod r#continue;
 mod r#for;
 pub mod formatter;
@@ -44,6 +46,7 @@ mod r#while;
 pub use assign::*;
 pub use binary::*;
 pub use call::*;
+pub use class::*;
 pub use close::*;
 pub use closure::*;
 pub use global::*;
@@ -280,6 +283,7 @@ pub enum Statement {
     Break(Break),
     Close(Close),
     SetList(SetList),
+    Class(Class),
     Comment(Comment),
 }
 
@@ -329,6 +333,7 @@ impl fmt::Display for Statement {
             Statement::Comment(comment) => write!(f, "{}", comment),
             Statement::SetList(setlist) => write!(f, "{}", setlist),
             Statement::Close(close) => write!(f, "{}", close),
+            Statement::Class(class) => write!(f, "{}", class),
             Statement::Empty(empty) => write!(f, "{}", empty),
         }
     }

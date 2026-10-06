@@ -246,7 +246,8 @@ impl<'a> Lifter<'a> {
         block_start: usize,
         block_end: usize,
     ) -> (Vec<ast::Statement>, Vec<(NodeIndex, BlockEdge)>) {
-        let mut statements = Vec::with_capacity((block_start..=block_end).count());
+        let mut statements: Vec<ast::Statement> =
+            Vec::with_capacity((block_start..=block_end).count());
         let mut edges = Vec::new();
 
         let mut top: Option<(ast::RValue, u8)> = None;
@@ -400,6 +401,58 @@ impl<'a> Lifter<'a> {
                         statements.push(
                             ast::Assign::new(
                                 vec![ast::Index::new(table.into(), key.into()).into()],
+                                vec![value.into()],
+                            )
+                            .into(),
+                        );
+                    }
+                    OpCode::LOP_LOADKX => {
+                        let target = self.register(a as _);
+                        // emit a class declaration, newclassmember fills in the methods
+                        let shape = match &self.function_list[self.function.id].constants
+                            [aux as usize]
+                        {
+                            BytecodeConstant::ClassShape {
+                                class_name,
+                                properties,
+                            } => Some((*class_name, properties.clone())),
+                            _ => None,
+                        };
+                        if let Some((class_name, property_indices)) = shape {
+                            let name = match self.constant(class_name) {
+                                ast::Literal::String(bytes) => {
+                                    String::from_utf8_lossy(&bytes).into_owned()
+                                }
+                                _ => String::new(),
+                            };
+                            let mut class = ast::Class::new(target, name);
+                            for property in property_indices {
+                                if let ast::Literal::String(bytes) = self.constant(property) {
+                                    class
+                                        .properties
+                                        .push(String::from_utf8_lossy(&bytes).into_owned());
+                                }
+                            }
+                            statements.push(class.into());
+                        } else {
+                            let constant = self.constant(aux as _);
+                            statements.push(
+                                ast::Assign::new(vec![target.into()], vec![constant.into()])
+                                    .into(),
+                            );
+                        }
+                    }
+                    OpCode::LOP_NEWCLASSMEMBER => {
+                        // emit the method as a plain class[name] = closure field
+                        // assignment so ssa correctly versions methods that capture
+                        // the class itself, fold_classes will move them into the class
+                        // body later
+                        let class_local = self.register(a as _);
+                        let value = self.register(c as _);
+                        let key = self.constant(aux as _);
+                        statements.push(
+                            ast::Assign::new(
+                                vec![ast::Index::new(class_local.into(), key.into()).into()],
                                 vec![value.into()],
                             )
                             .into(),
@@ -582,7 +635,7 @@ impl<'a> Lifter<'a> {
                             instruction => unreachable!("{:?}", instruction),
                         }
                     }
-                    OpCode::LOP_CALL => {
+                    OpCode::LOP_CALL | OpCode::LOP_CALLFB => {
                         let arguments = if b != 0 {
                             (a + 1..a + b)
                                 .map(|r| self.register(r as _).into())

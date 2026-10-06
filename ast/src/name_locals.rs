@@ -68,6 +68,20 @@ impl Namer {
                     }
                     self.name_locals(&mut generic_for.block.lock());
                 }
+                Statement::Class(class) => {
+                    let usable = !class.name.is_empty()
+                        && class.name.bytes().next().is_some_and(|b| {
+                            b.is_ascii_alphabetic() || b == b'_'
+                        })
+                        && class.name.bytes().all(|b| {
+                            b.is_ascii_alphanumeric() || b == b'_'
+                        });
+                    if usable {
+                        class.local.0 .0.lock().0 = Some(class.name.clone());
+                    } else {
+                        self.name_local("v", &class.local);
+                    }
+                }
                 _ => {}
             }
         }

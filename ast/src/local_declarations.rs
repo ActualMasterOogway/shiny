@@ -28,8 +28,11 @@ impl LocalDeclarer {
         let node = self.graph.add_node((Some(block.clone()), stat_index));
         self.block_to_node.insert(block.clone().into(), node);
         for (stat_index, stat) in block.lock().iter().enumerate() {
-            // for loops already declare their own locals :)
-            if !matches!(stat, Statement::GenericFor(_) | Statement::NumericFor(_)) {
+            // for loops and class declarations already declare their own locals :)
+            if !matches!(
+                stat,
+                Statement::GenericFor(_) | Statement::NumericFor(_) | Statement::Class(_)
+            ) {
                 // we only visit locals written because locals are guaranteed to be written
                 // before they are read.
                 // TODO: move to seperate function and visit breadth-first?
