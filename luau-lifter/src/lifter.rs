@@ -617,12 +617,21 @@ impl<'a> Lifter<'a> {
                         ));
                         match iter.next().unwrap().1 {
                             &Instruction::BC {
-                                op_code: OpCode::LOP_CALL,
+                                op_code: op @ (OpCode::LOP_CALL | OpCode::LOP_CALLFB),
                                 a,
                                 b,
                                 c,
                                 ..
                             } => {
+                                if op == OpCode::LOP_CALLFB {
+                                    assert!(matches!(
+                                        iter.next().unwrap().1,
+                                        Instruction::BC {
+                                            op_code: OpCode::LOP_NOP,
+                                            ..
+                                        }
+                                    ));
+                                }
                                 assert!(a == namecall_base);
                                 // TODO: repeated code :(
                                 let arguments = if b != 0 {

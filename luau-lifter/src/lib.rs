@@ -24,19 +24,9 @@ use lifter::Lifter;
 use clap::Parser;
 use parking_lot::Mutex;
 use petgraph::algo::dominators::simple_fast;
-use rayon::prelude::*;
 
-use anyhow::anyhow;
 use rustc_hash::FxHashMap;
 use triomphe::Arc;
-use walkdir::WalkDir;
-
-use std::{
-    fs::File,
-    io::{Read, Write},
-    path::Path,
-    time::Instant,
-};
 
 use deserializer::bytecode::Bytecode;
 
@@ -276,24 +266,25 @@ fn link_upvalues(
     for stat in &mut body.0 {
         stat.traverse_rvalues(&mut |rvalue| {
             if let ast::RValue::Closure(closure) = rvalue {
-                let old_upvalues = &upvalues[&closure.function];
-                let mut function = closure.function.lock();
-                // TODO: inefficient, try constructing a map of all up -> new up first
-                // and then call replace_locals on main body
-                let mut local_map =
-                    FxHashMap::with_capacity_and_hasher(old_upvalues.len(), Default::default());
-                for (old, new) in
-                    old_upvalues
-                        .iter()
-                        .zip(closure.upvalues.iter().map(|u| match u {
-                            ast::Upvalue::Copy(l) | ast::Upvalue::Ref(l) => l,
-                        }))
-                {
-                    // println!("{} -> {}", old, new);
-                    local_map.insert(old.clone(), new.clone());
+                if let Some(old_upvalues) = upvalues.get(&closure.function) {
+                    let mut function = closure.function.lock();
+                    // TODO: inefficient, try constructing a map of all up -> new up first
+                    // and then call replace_locals on main body
+                    let mut local_map =
+                        FxHashMap::with_capacity_and_hasher(old_upvalues.len(), Default::default());
+                    for (old, new) in
+                        old_upvalues
+                            .iter()
+                            .zip(closure.upvalues.iter().map(|u| match u {
+                                ast::Upvalue::Copy(l) | ast::Upvalue::Ref(l) => l,
+                            }))
+                    {
+                        // println!("{} -> {}", old, new);
+                        local_map.insert(old.clone(), new.clone());
+                    }
+                    link_upvalues(&mut function.body, upvalues);
+                    replace_locals(&mut function.body, &local_map);
                 }
-                link_upvalues(&mut function.body, upvalues);
-                replace_locals(&mut function.body, &local_map);
             }
         });
         match stat {
