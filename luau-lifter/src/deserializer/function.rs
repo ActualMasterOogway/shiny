@@ -1,14 +1,12 @@
-use core::num;
-
 use nom::{
-    complete::take,
+    bytes::complete::take,
     number::complete::{le_u32, le_u8},
     IResult,
 };
 use nom_leb128::leb128_usize;
 
 use super::{
-    constant::Constant,
+    constant::{leb128_u64, Constant},
     list::{parse_list, parse_list_len},
 };
 
@@ -32,7 +30,7 @@ pub struct Function {
 }
 
 impl Function {
-    fn parse_instructions(vec: &Vec<u32>, encode_key: u8) -> Vec<Instruction> {
+    fn parse_instructions(vec: &[u32], encode_key: u8) -> Vec<Instruction> {
         let mut v: Vec<Instruction> = Vec::new();
         let mut pc = 0;
 
@@ -73,7 +71,9 @@ impl Function {
                 | OpCode::LOP_SETUDATAKS
                 | OpCode::LOP_NAMECALLUDATA
                 | OpCode::LOP_NEWCLASSMEMBER
-                | OpCode::LOP_CALLFB => {
+                | OpCode::LOP_CALLFB
+                | OpCode::LOP_CMPPROTO
+                | OpCode::LOP_NEWCLASS => {
                     let aux = vec[pc + 1];
                     pc += 2;
                     match ins {
@@ -116,6 +116,14 @@ impl Function {
     }
 
     pub(crate) fn parse(input: &[u8], encode_key: u8, version: u8) -> IResult<&[u8], Self> {
+        let (input, proto_size) = if version >= 12 {
+            let (input, size) = leb128_usize(input)?;
+            (input, Some(size))
+        } else {
+            (input, None)
+        };
+        let proto_start_input = input;
+
         let (input, max_stack_size) = le_u8(input)?;
         let (input, num_parameters) = le_u8(input)?;
         let (input, num_upvalues) = le_u8(input)?;
@@ -184,6 +192,23 @@ impl Function {
                 input = rest;
             }
             input
+        } else {
+            input
+        };
+        let input = if version >= 12 && (flags & (1 << 3)) != 0 {
+            let (input, _cost) = leb128_u64(input)?;
+            input
+        } else {
+            input
+        };
+        let input = if let Some(proto_size) = proto_size {
+            let bytes_read = proto_start_input.len() - input.len();
+            if proto_size > bytes_read {
+                let (input, _) = take(proto_size - bytes_read)(input)?;
+                input
+            } else {
+                input
+            }
         } else {
             input
         };

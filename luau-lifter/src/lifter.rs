@@ -2,7 +2,6 @@ use anyhow::Result;
 
 use by_address::ByAddress;
 
-use itertools::Itertools;
 use parking_lot::Mutex;
 use petgraph::stable_graph::NodeIndex;
 
@@ -167,7 +166,8 @@ impl<'a> Lifter<'a> {
                     | OpCode::LOP_JUMPXEQKNIL
                     | OpCode::LOP_JUMPXEQKB
                     | OpCode::LOP_JUMPXEQKN
-                    | OpCode::LOP_JUMPXEQKS => {
+                    | OpCode::LOP_JUMPXEQKS
+                    | OpCode::LOP_CMPPROTO => {
                         let dest_index = (insn_index + 1).checked_add_signed((*d).into()).unwrap();
                         self.blocks
                             .entry(insn_index + 2)
@@ -210,7 +210,7 @@ impl<'a> Lifter<'a> {
                     }
                     OpCode::LOP_FORGLOOP => {
                         let dest_index = (insn_index + 1)
-                            .checked_add_signed((*d).try_into().unwrap())
+                            .checked_add_signed((*d).into())
                             .unwrap();
                         self.blocks
                             .entry(insn_index + 1)
@@ -458,6 +458,35 @@ impl<'a> Lifter<'a> {
                             .into(),
                         );
                     }
+                    OpCode::LOP_NEWCLASS => {
+                        let target = self.register(a as _);
+                        let shape = match &self.function_list[self.function.id].constants
+                            [aux as usize]
+                        {
+                            BytecodeConstant::ClassShape {
+                                class_name,
+                                properties,
+                            } => Some((*class_name, properties.clone())),
+                            _ => None,
+                        };
+                        if let Some((class_name, property_indices)) = shape {
+                            let name = match self.constant(class_name) {
+                                ast::Literal::String(bytes) => {
+                                    String::from_utf8_lossy(&bytes).into_owned()
+                                }
+                                _ => String::new(),
+                            };
+                            let mut class = ast::Class::new(target, name);
+                            for property in property_indices {
+                                if let ast::Literal::String(bytes) = self.constant(property) {
+                                    class
+                                        .properties
+                                        .push(String::from_utf8_lossy(&bytes).into_owned());
+                                }
+                            }
+                            statements.push(class.into());
+                        }
+                    }
                     OpCode::LOP_SETTABLEN => {
                         let value = self.register(a as _);
                         let table = self.register(b as _);
@@ -565,7 +594,8 @@ impl<'a> Lifter<'a> {
                     | OpCode::LOP_FASTCALL1
                     | OpCode::LOP_FASTCALL2
                     | OpCode::LOP_FASTCALL2K
-                    | OpCode::LOP_FASTCALL3 => {}
+                    | OpCode::LOP_FASTCALL3
+                    | OpCode::LOP_FASTPCALL => {}
                     OpCode::LOP_NAMECALL | OpCode::LOP_NAMECALLUDATA => {
                         let namecall_base = a;
                         let namecall_object = self.register(b as _);
@@ -1371,6 +1401,33 @@ impl<'a> Lifter<'a> {
                             .into(),
                         );
                     }
+                    OpCode::LOP_CMPPROTO => {
+                        let a = self.register(a as _);
+                        let proto_literal = ast::Literal::Integer(aux as i64);
+                        statements.push(
+                            ast::If::new(
+                                ast::Binary::new(
+                                    a.into(),
+                                    proto_literal.into(),
+                                    ast::BinaryOperation::NotEqual,
+                                )
+                                .into(),
+                                ast::Block::default(),
+                                ast::Block::default(),
+                            )
+                            .into(),
+                        );
+                        edges.push((
+                            self.block_to_node(
+                                ((block_start + index + 1) as isize + d as isize) as usize,
+                            ),
+                            BlockEdge::new(BranchType::Then),
+                        ));
+                        edges.push((
+                            self.block_to_node(block_start + index + 2),
+                            BlockEdge::new(BranchType::Else),
+                        ));
+                    }
                     _ => unreachable!("{:?}", instruction),
                 },
                 Instruction::E { op_code, e } => match op_code {
@@ -1384,7 +1441,6 @@ impl<'a> Lifter<'a> {
                     }
                     _ => unreachable!("{:?}", instruction),
                 },
-                _ => unimplemented!("{:?}", instruction),
             }
         }
 
@@ -1469,6 +1525,7 @@ impl<'a> Lifter<'a> {
                     | OpCode::LOP_FORGLOOP
                     | OpCode::LOP_FORGPREP_INEXT
                     | OpCode::LOP_FORGPREP_NEXT
+                    | OpCode::LOP_CMPPROTO
             ),
             Instruction::E { op_code, .. } => matches!(op_code, OpCode::LOP_JUMPX),
         }

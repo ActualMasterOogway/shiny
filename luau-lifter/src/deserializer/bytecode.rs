@@ -19,7 +19,7 @@ impl Bytecode {
                     Bytecode::Error(String::from_utf8_lossy(error_msg).to_string()),
                 ))
             }
-            4..=11 => {
+            4..=14 | 100 => {
                 let (input, chunk) = Chunk::parse(input, encode_key, status_code)?;
                 Ok((input, Bytecode::Chunk(chunk)))
             }

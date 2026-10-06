@@ -19,6 +19,7 @@ const CONSTANT_INTEGER: u8 = 9;
 // initial 0.720/0.721 window) inserted CLASS_SHAPE at tag 9 and shifted INTEGER
 // to tag 10, tho that was reverted before release
 const CONSTANT_CLASS_SHAPE: u8 = 10;
+const CONSTANT_VECTORD: u8 = 11;
 
 #[derive(Debug)]
 pub enum Constant {
@@ -41,7 +42,7 @@ pub enum Constant {
     },
 }
 
-fn leb128_u64(input: &[u8]) -> IResult<&[u8], u64> {
+pub(crate) fn leb128_u64(input: &[u8]) -> IResult<&[u8], u64> {
     let mut result: u64 = 0;
     let mut shift: u32 = 0;
     let mut i = 0;
@@ -134,6 +135,16 @@ impl Constant {
                         class_name,
                         properties,
                     },
+                ))
+            }
+            CONSTANT_VECTORD => {
+                let (input, x) = le_f64(input)?;
+                let (input, y) = le_f64(input)?;
+                let (input, z) = le_f64(input)?;
+                let (input, w) = le_f64(input)?;
+                Ok((
+                    input,
+                    Constant::Vector(x as f32, y as f32, z as f32, w as f32),
                 ))
             }
             _ => panic!("{}", tag),

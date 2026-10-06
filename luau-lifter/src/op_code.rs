@@ -384,6 +384,25 @@ pub enum OpCode {
     // AUX: feedback slot id (0xFFFFFFFF when sealed)
     LOP_CALLFB,
 
+    // CMPPROTO: check if a register contains a closure with a specified Luau function proto id (bytecode v11+).
+    // A: closure register
+    // D: jump offset if proto doesn't match
+    // AUX: proto id
+    LOP_CMPPROTO,
+
+    // FASTPCALL: perform a fastcall of a built-in protected call function (bytecode v14+).
+    // A: protected function id (0 - pcall, 1 - xpcall)
+    // B: number of explicit arguments before a variadic tail
+    // C: jump offset to get to following CALL
+    LOP_FASTPCALL,
+
+    // NEWCLASS: reify a class object (bytecode v100).
+    // A: target register of class
+    // B: source register of superclass, or 0xFF if no superclass
+    // C: bottom bit is 1 if the class is open, else 0; upper 7 bits are reserved
+    // AUX: constant table index of unreified class object
+    LOP_NEWCLASS,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT,
 }
