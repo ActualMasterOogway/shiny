@@ -85,11 +85,11 @@ impl Reduce for Unary {
             }
             (
                 RValue::Unary(Unary {
-                    box value,
+                    value,
                     operation: UnaryOperation::Not,
                 }),
                 UnaryOperation::Not,
-            ) => ensure_boolean(value.reduce_condition()),
+            ) => ensure_boolean((*value).reduce_condition()),
             (RValue::Literal(Literal::Number(value)), UnaryOperation::Negate) => {
                 RValue::Literal(Literal::Number(-value))
             }
@@ -235,11 +235,11 @@ impl Reduce for Unary {
             }
             (
                 RValue::Unary(Unary {
-                    box value,
+                    value,
                     operation: UnaryOperation::Not,
                 }),
                 UnaryOperation::Not,
-            ) => value.reduce_condition(),
+            ) => (*value).reduce_condition(),
             (RValue::Literal(Literal::Number(value)), UnaryOperation::Negate) => {
                 RValue::Literal(Literal::Number(-value))
             }

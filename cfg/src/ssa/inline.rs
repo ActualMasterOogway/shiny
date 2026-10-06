@@ -57,7 +57,7 @@ impl<'a> Inliner<'a> {
                                     operation,
                                 }) if operation.is_comparator()
                                     && left.has_side_effects()
-                                    && let box ast::RValue::Local(local) = &right
+                                    && let ast::RValue::Local(local) = &**right
                                     && local == read =>
                                 {
                                     *right = std::mem::replace(
@@ -550,9 +550,10 @@ pub fn inline(
                         && field_assign.left.len() == 1
                         && field_assign.right.len() == 1
                         && let ast::LValue::Index(ast::Index {
-                            left: box ast::RValue::Local(local),
+                            left,
                             ..
                         }) = &field_assign.left[0]
+                        && let ast::RValue::Local(local) = &**left
                         && local == &object_local
                     {
                         let right = &field_assign.right[0];

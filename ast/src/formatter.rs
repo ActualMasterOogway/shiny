@@ -582,15 +582,15 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
                     let mut index = index;
                     let mut valid = true;
                     loop {
-                        if let box RValue::Literal(Literal::String(key)) = &index.right
+                        if let RValue::Literal(Literal::String(key)) = &*index.right
                             && Self::is_valid_name(key)
                         {
-                            match index.left {
-                                box RValue::Index(ref i) => {
+                            match &*index.left {
+                                RValue::Index(i) => {
                                     index = i;
                                     continue;
                                 }
-                                box RValue::Global(_) | box RValue::Local(_) => {}
+                                RValue::Global(_) | RValue::Local(_) => {}
                                 _ => valid = false,
                             }
                         } else {

@@ -1,5 +1,3 @@
-#![feature(box_patterns)]
-
 use lua51_lifter::decompile_bytecode;
 use std::{
     fs::File,

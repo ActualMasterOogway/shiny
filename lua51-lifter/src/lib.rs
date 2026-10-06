@@ -1,5 +1,3 @@
-#![feature(box_patterns)]
-
 use ast::{
     local_declarations::LocalDeclarer, name_locals::name_locals, replace_locals::replace_locals,
     Traverse,
