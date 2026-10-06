@@ -50,7 +50,7 @@ impl LocalRw for NumForInit {
             .values_read()
             .into_iter()
             .chain(self.limit.1.values_read())
-            .chain(self.step.1.values_read().into_iter())
+            .chain(self.step.1.values_read())
             .collect()
     }
 
@@ -60,7 +60,7 @@ impl LocalRw for NumForInit {
             .values_read_mut()
             .into_iter()
             .chain(self.limit.1.values_read_mut())
-            .chain(self.step.1.values_read_mut().into_iter())
+            .chain(self.step.1.values_read_mut())
             .collect()
     }
 
@@ -70,7 +70,7 @@ impl LocalRw for NumForInit {
             .values_written()
             .into_iter()
             .chain(self.limit.0.values_written())
-            .chain(self.step.0.values_written().into_iter())
+            .chain(self.step.0.values_written())
             .collect()
     }
 
@@ -80,7 +80,7 @@ impl LocalRw for NumForInit {
             .values_written_mut()
             .into_iter()
             .chain(self.limit.0.values_written_mut())
-            .chain(self.step.0.values_written_mut().into_iter())
+            .chain(self.step.0.values_written_mut())
             .collect()
     }
 }
@@ -138,7 +138,7 @@ impl LocalRw for NumForNext {
             .1
             .values_read()
             .into_iter()
-            .chain(self.step.values_read().into_iter())
+            .chain(self.step.values_read())
             .chain(self.limit.values_read())
             .collect()
     }
@@ -148,7 +148,7 @@ impl LocalRw for NumForNext {
             .1
             .values_read_mut()
             .into_iter()
-            .chain(self.step.values_read_mut().into_iter())
+            .chain(self.step.values_read_mut())
             .chain(self.limit.values_read_mut())
             .collect()
     }
@@ -374,7 +374,7 @@ impl LocalRw for GenericForNext {
         self.generator
             .values_read()
             .into_iter()
-            .chain(self.state.values_read().into_iter())
+            .chain(self.state.values_read())
             .collect()
     }
 
@@ -382,7 +382,7 @@ impl LocalRw for GenericForNext {
         self.generator
             .values_read_mut()
             .into_iter()
-            .chain(self.state.values_read_mut().into_iter())
+            .chain(self.state.values_read_mut())
             .collect()
     }
 

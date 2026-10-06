@@ -2,9 +2,8 @@ use ast::SideEffects;
 use cfg::block::{BlockEdge, BranchType};
 use itertools::Itertools;
 use petgraph::{
-    algo::dominators::Dominators,
     stable_graph::NodeIndex,
-    visit::{EdgeRef, IntoEdgeReferences},
+    visit::EdgeRef,
     Direction,
 };
 

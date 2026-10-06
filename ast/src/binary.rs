@@ -94,7 +94,7 @@ impl SideEffects for Binary {
     }
 }
 
-impl<'a: 'b, 'b> Reduce for Binary {
+impl Reduce for Binary {
     fn reduce(self) -> RValue {
         // TODO: true == true, true == false, etc.
         // really anything without side effects should be true if l == r
@@ -171,7 +171,7 @@ impl<'a: 'b, 'b> Reduce for Binary {
                 RValue::Literal(Literal::String(right)),
                 BinaryOperation::Concat,
             ) => RValue::Literal(Literal::String(
-                left.into_iter().chain(right.into_iter()).collect(),
+                left.into_iter().chain(right).collect(),
             )),
             (left, right, operation) => Self {
                 left: Box::new(left),
@@ -254,7 +254,7 @@ impl<'a: 'b, 'b> Reduce for Binary {
                 RValue::Literal(Literal::String(right)),
                 BinaryOperation::Concat,
             ) => RValue::Literal(Literal::String(
-                left.into_iter().chain(right.into_iter()).collect(),
+                left.into_iter().chain(right).collect(),
             )),
             (left, right, operation) => Self {
                 left: Box::new(left),
@@ -318,7 +318,7 @@ impl LocalRw for Binary {
         self.left
             .values_read()
             .into_iter()
-            .chain(self.right.values_read().into_iter())
+            .chain(self.right.values_read())
             .collect()
     }
 
@@ -326,7 +326,7 @@ impl LocalRw for Binary {
         self.left
             .values_read_mut()
             .into_iter()
-            .chain(self.right.values_read_mut().into_iter())
+            .chain(self.right.values_read_mut())
             .collect()
     }
 }

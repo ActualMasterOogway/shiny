@@ -26,7 +26,7 @@ impl LocalRw for Index {
         self.left
             .values_read()
             .into_iter()
-            .chain(self.right.values_read().into_iter())
+            .chain(self.right.values_read())
             .collect()
     }
 
@@ -34,7 +34,7 @@ impl LocalRw for Index {
         self.left
             .values_read_mut()
             .into_iter()
-            .chain(self.right.values_read_mut().into_iter())
+            .chain(self.right.values_read_mut())
             .collect()
     }
 }

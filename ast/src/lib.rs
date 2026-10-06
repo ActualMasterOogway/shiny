@@ -126,7 +126,7 @@ impl type_system::Infer for RValue {
     }
 }
 
-impl<'a: 'b, 'b> Reduce for RValue {
+impl Reduce for RValue {
     fn reduce(self) -> RValue {
         match self {
             Self::Unary(unary) => unary.reduce(),
@@ -156,7 +156,7 @@ impl RValue {
             Self::Binary(binary) => binary.precedence(),
             Self::Unary(unary) => unary.precedence(),
             RValue::Literal(Literal::Number(n)) if n.is_finite() && n.is_sign_negative() => {
-                return 7;
+                7
             }
             _ => 9,
         }

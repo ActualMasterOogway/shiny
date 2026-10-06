@@ -1,8 +1,6 @@
-use std::fmt::Write;
-use std::iter;
 use std::{
     borrow::Cow,
-    fmt::{self},
+    fmt,
 };
 
 use itertools::Itertools;
@@ -12,8 +10,10 @@ use crate::{
     Literal, MethodCall, NumericFor, RValue, Repeat, Return, Select, Statement, Table, Unary, While,
 };
 
+#[derive(Default)]
 pub enum IndentationMode {
     Spaces(u8),
+    #[default]
     Tab,
 }
 
@@ -36,11 +36,6 @@ impl fmt::Display for IndentationMode {
     }
 }
 
-impl Default for IndentationMode {
-    fn default() -> Self {
-        Self::Tab
-    }
-}
 
 pub(crate) fn format_arg_list(list: &[RValue]) -> String {
     let mut s = String::new();
@@ -225,13 +220,12 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
                     write!(self.output, ")")?;
                 }
             } else {
-                if !sequential_keys {
-                    if let Some(key) = key {
+                if !sequential_keys
+                    && let Some(key) = key {
                         write!(self.output, "[")?;
                         self.format_rvalue(key)?;
                         write!(self.output, "] = ")?;
                     }
-                }
                 self.format_rvalue(value)?;
                 if !is_last {
                     write!(self.output, ",")?;
@@ -438,11 +432,11 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
         if RESERVED_KEYWORDS.contains(&name_str) {
             return false;
         }
-        return true;
+        true
     }
 
     // TODO: PERF: Cow like from_utf8_lossy
-    pub(crate) fn escape_string(string: &[u8]) -> Cow<str> {
+    pub(crate) fn escape_string(string: &[u8]) -> Cow<'_, str> {
         let mut owned: Option<String> = None;
         let mut iter = string.iter().enumerate().peekable();
         while let Some((i, &c)) = iter.next() {
@@ -475,7 +469,7 @@ impl<'a, W: fmt::Write> Formatter<'a, W> {
                             && let Some((_, next)) = iter.peek()
                             && next.is_ascii_digit()
                         {
-                            owned.extend(iter::repeat('0').take(3 - printed.len()));
+                            owned.extend(std::iter::repeat_n('0', 3 - printed.len()));
                         }
                         owned.push_str(printed);
                     }

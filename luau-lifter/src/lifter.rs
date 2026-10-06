@@ -34,6 +34,7 @@ pub struct Lifter<'a> {
 }
 
 impl<'a> Lifter<'a> {
+    #[allow(clippy::type_complexity)]
     pub fn lift(
         f_list: &'a Vec<BytecodeFunction>,
         str_list: &'a Vec<Vec<u8>>,

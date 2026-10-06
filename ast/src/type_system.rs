@@ -97,7 +97,7 @@ impl Display for Type {
                         } else {
                             format!("[{}]: {}", indexer_type, element_type)
                         },
-                        (!fields.is_empty()).then_some(", ").unwrap_or_default(),
+                        if !fields.is_empty() { ", " } else { Default::default() },
                         fields
                             .iter()
                             .map(|(field, r#type)| { format!("{}: {}", field, r#type) })

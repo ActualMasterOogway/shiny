@@ -16,6 +16,7 @@ use triomphe::Arc;
 use crate::{Assign, Block, LocalRw, RcLocal, Statement};
 
 #[derive(Default)]
+#[allow(clippy::type_complexity)]
 pub struct LocalDeclarer {
     block_to_node: FxHashMap<ByAddress<Arc<Mutex<Block>>>, NodeIndex>,
     graph: DiGraph<(Option<Arc<Mutex<Block>>>, usize), ()>,
